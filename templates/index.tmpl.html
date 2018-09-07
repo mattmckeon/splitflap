@@ -1,6 +1,14 @@
 <html>
   {{template "header.tmpl.html"}}
   <body>
-    Hellooooo Heroku!
+    <table>
+      {{range .departures}}
+        <tr>
+          <td>{{.TimeLabel}}<td>
+          <td>{{.Route.LongName}}<td>
+          <td>{{.Route.Description}}<td>
+        </tr>
+      {{end}}
+    </table>
   </body>
 </html>
