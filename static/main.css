@@ -1,4 +1,9 @@
 .main {
-    backround: black;
+    background: black;
     color: #00FF00;
+}
+
+.main th, td {
+    padding: 15px;
+    text-align: left;
 }

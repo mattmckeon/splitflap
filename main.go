@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"time"
 
 	"github.com/dghubble/sling"
@@ -24,6 +26,7 @@ type RouteProperties struct {
 	TextColor   string `json:"text_color"`
 	Description string `json:"description"`
 	LongName    string `json:"long_name"`
+	Type        int    `json:"type"`
 }
 
 type DepartureResponse struct {
@@ -46,6 +49,7 @@ type DepartureResponse struct {
 }
 
 type Departure struct {
+	Time time.Time
 	TimeLabel string
 	Route RouteProperties
 }
@@ -62,7 +66,10 @@ func NewMbtaService(httpClient *http.Client) *MbtaService {
 
 func (s *MbtaService) ListDepartures(params *ScheduleParams) (DepartureResponse, *http.Response, error) {
 	departures := new(DepartureResponse)
-	resp, err := s.sling.New().Path("schedules").QueryStruct(params).ReceiveSuccess(departures)
+	sling := s.sling.New().Path("schedules").QueryStruct(params)
+	req, err := sling.Request()
+	fmt.Printf("request: %v", req)
+	resp, err := sling.ReceiveSuccess(departures)
 	return *departures, resp, err
 }
 
@@ -94,29 +101,44 @@ func main() {
 	router.LoadHTMLGlob("templates/*.tmpl.html")
 	router.Static("/static", "static")
 
+	// TODO: use predictions API	
+    // example: https://api-v3.mbta.com/predictions?filter%5Bmax_time%5D=09%3A13&filter%5Bmin_time%5D=08%3A43&filter%5Bstop%5D=place-north&include=route,stop
+	// included stop has platform: {"attributes": {"platform_code":"6"}, id "North Station-06"}
+	// Prediction: {"attributes": {"departure_time":"XYZ", "status":"All aboard"}}
+	// Relationships: route, stop
 	router.GET("/", func(c *gin.Context) {
 		now := time.Now()
 		params := &ScheduleParams{
-			MinTime: now.Format("14:00"),
-			MaxTime: now.Add(time.Minute * 30).Format("14:00"),
+			MinTime: now.Format("15:04"),
+			MaxTime: now.Add(time.Minute * 30).Format("15:04"),
 			Stop:    "place-north",
 			Include: "route"}
 		client := NewClient(NewHttpClient())
+		// TODO: handle request error
 		departureResponse, _, _ := client.MbtaService.ListDepartures(params)
 		routeIndex := make(map[string]RouteProperties)
 		for _, entry := range departureResponse.RouteIndex {
 			routeIndex[entry.Id] = entry.Route
 		}
-		departures := []Departure{}
-		for _, d := range departureResponse.Departures {
-			t, _ := time.Parse(time.RFC3339, d.Attributes.DepartureTime)
-			departures = append(departures, Departure{
-				TimeLabel: t.Format("12:00PM"),
-				Route: routeIndex[d.Relationships.Route.Data.Id],
-			})
+		nextDepartures := []Departure{}
+		for _, dr := range departureResponse.Departures {
+			routeId := dr.Relationships.Route.Data.Id
+			// TODO: make the type a constant
+			if routeIndex[routeId].Type == 2 {
+				d := Departure{}
+				// TODO: handle time parse error
+				d.Time, _ = time.Parse(time.RFC3339, dr.Attributes.DepartureTime)
+				d.TimeLabel = d.Time.Format("3:04PM")
+				d.Route = routeIndex[routeId]
+				nextDepartures = append(nextDepartures, d)
+			}
 		}
+		sort.Slice(nextDepartures, func(i, j int) bool {
+			return nextDepartures[i].Time.Before(nextDepartures[j].Time)
+		})
+		
 		c.HTML(http.StatusOK, "index.tmpl.html", gin.H{
-			"departures": departures,
+			"departures": nextDepartures,
 		})
 	})
 
