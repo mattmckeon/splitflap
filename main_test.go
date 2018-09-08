@@ -25,10 +25,10 @@ func TestParse(t *testing.T) {
 	actual, _ := ExtractDepartures(apiResponse)
 
 	expected :=  []Departure {
-		{"11:40AM", "Haverhill Line", "4", "Now boarding"},
-		{"12:20PM", "Newburyport/Rockport Line", "", "On time"},
-		{"1:10PM", "Fitchburg Line", "",  "On time"},
-		{"1:30PM", "Newburyport/Rockport Line", "", "On time"},
+		{"4:30PM", "Newburyport", "", "On time"},
+		{"5:30PM", "Rockport", "", "On time"},
+		{"5:35PM", "Haverhill", "",  "On time"},
+		{"5:45PM", "Wachusett", "", "On time"},
 	}
 	assert.Equal(t, expected, actual)
 }

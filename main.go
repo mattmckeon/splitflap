@@ -30,14 +30,19 @@ type ApiV3Response struct {
 					Id string `json:"id"`
 				} `json:"data"`
 			} `json:"stop"`
+			Trip struct {
+				Data struct {
+					Id string `json:"id"`
+				} `json:"data"`
+			} `json:"trip"`
 		} `json:"relationships"`
 		Id string `json:"id"`
 	} `json:"data"`
 	Included []struct {
 		Attributes struct {
-			// This is pretty hacky - we're basically merging the two
-			// different types we could be getting back in this list
-			// (routes and stops). Go has great support for parsing
+			// This is pretty hacky - we're basically merging the three
+			// different types we could be getting back in the included list
+			// (routes, trips and stops). Go has great support for parsing
 			// of well-formed and strongly typed JSON object graphs,
 			// and OK support for generic handling of simple and shallow
 			// JSON responses. Things get hairy though when we have deeply
@@ -48,9 +53,9 @@ type ApiV3Response struct {
 			// we're trying to cross-reference relationships.
 			// I tried a couple of different approaches and this seemed the
 			// least bad.
-			LongName string `json:"long_name"`
+			Headsign string `json:"headsign"`
 			PlatformCode string `json:"platform_code"`
-			Type int `json:"type"`
+			RouteType int `json:"type"`
 		} `json:"attributes"`
 		Type string `json:"type"`
 		Id string `json:"id"`
@@ -89,14 +94,18 @@ func NewMbtaService() *MbtaService {
 
 func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 	trackIndex := make(map[string]string)
+	routeIndex := make(map[string]bool)
 	destinationIndex := make(map[string]string)
 	for _, entry := range apiResponse.Included {
-		// Only index destinations on commuter rail routes (type == 2)
-		if entry.Type == "route" && entry.Attributes.Type == 2 {
-			destinationIndex[entry.Id] = entry.Attributes.LongName
+		// Only index commuter rail routes so we can filter predictions.
+		if entry.Type == "route" && entry.Attributes.RouteType == 2 {
+			routeIndex[entry.Id] = true
 		}
 		if entry.Type == "stop" {
 			trackIndex[entry.Id] = entry.Attributes.PlatformCode
+		}
+		if entry.Type == "trip" {
+			destinationIndex[entry.Id] = entry.Attributes.Headsign
 		}
 	}
 
@@ -104,11 +113,11 @@ func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 	for _, result := range apiResponse.Data {
 		// Don't show trains for which we don't have a prediction.
 		if (result.Attributes.DepartureTime != "") {
-			// Our destination index only includes commuter rail trains;
+			// Our route index only includes commuter rail trains;
 			// we can skip anything that isn't in the index (e.g. green line etc)
-			if destination, ok := destinationIndex[result.Relationships.Route.Data.Id]; ok {
+			if _, ok := routeIndex[result.Relationships.Route.Data.Id]; ok {
 				d := Departure{}
-				d.Destination = destination
+				d.Destination = destinationIndex[result.Relationships.Trip.Data.Id]
 				// TODO: handle time parse error
 				t, _ := time.Parse(time.RFC3339, result.Attributes.DepartureTime)
 				d.TimeLabel = t.Format("3:04PM")
@@ -121,16 +130,16 @@ func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 	return departures, nil
 }
 
-func (s *MbtaService) ListDepartures(params *Params) ([]Departure, *http.Response, error) {
+func (s *MbtaService) ListDepartures(params *Params) ([]Departure, error) {
 	sling := s.sling.New().Path("predictions").QueryStruct(params)
 	// TODO: handle request error
 	req, err := sling.Request()
 	fmt.Printf("request: %v", req)
 	apiResponse := new(ApiV3Response)
 	// TODO: handle response error
-	resp, err := sling.ReceiveSuccess(apiResponse)
+	_, err = sling.ReceiveSuccess(apiResponse)
 	departures, err := ExtractDepartures(apiResponse)
-	return departures, resp, err
+	return departures, err
 }
 
 func main() {
@@ -148,14 +157,17 @@ func main() {
 	router.GET("/", func(c *gin.Context) {
 		params := &Params{
 			Stop:    "place-north",
-			Include: "route,stop",
+			Include: "route,stop,trip",
 			Sort: "departure_time",
 		}
 		client := NewMbtaService()
-		// TODO: handle request error
-		departures, _, _ := client.ListDepartures(params)
+		// TODO: handle request errors
+		northStation, _ := client.ListDepartures(params)
+		params.Stop = "place-sstat"
+		southStation, _ := client.ListDepartures(params)
 		c.HTML(http.StatusOK, "index.tmpl.html", gin.H{
-			"departures": departures,
+			"northStation": northStation,
+			"southStation": southStation,
 		})
 	})
 
