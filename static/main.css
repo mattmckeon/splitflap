@@ -18,12 +18,16 @@ table.departureBoard {
 .departureBoard th, td {
     padding: .3em;
     text-align: left;
-    font-size: 2em;
+}
+
+.departureBoard th {
+    font-size: 1.5em
 }
 
 .departureBoard td {
     color: #f1f442;
     font-family: 'VT323', monospace;
+    font-size: 2em;
 }
 
 .departureBoard .time, .departureBoard .destination {
