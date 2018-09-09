@@ -1,29 +1,7 @@
 <html>
   {{template "header.tmpl.html"}}
   <body class="main">
-    <table>
-      <caption>North Station</caption>
-      <tr><th>Time</th><th>Destination</th><th>Track</th><th>Status</th></tr>
-      {{range .northStation}}
-        <tr>
-          <td>{{.TimeLabel}}</td>
-          <td>{{.Destination}}</td>
-          <td>{{.Track}}</td>
-          <td>{{.Status}}</td>
-        </tr>
-      {{end}}
-    </table>
-    <table>
-      <caption>South Station</caption>
-      <tr><th>Time</th><th>Destination</th><th>Track</th><th>Status</th></tr>
-      {{range .southStation}}
-        <tr>
-          <td>{{.TimeLabel}}</td>
-          <td>{{.Destination}}</td>
-          <td>{{.Track}}</td>
-          <td>{{.Status}}</td>
-        </tr>
-      {{end}}
-    </table>
+    {{template "departure_board.tmpl.html" .northStation}}
+    {{template "departure_board.tmpl.html" .southStation}}
   </body>
 </html>

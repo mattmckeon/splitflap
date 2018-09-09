@@ -1,0 +1,18 @@
+<table class="departureBoard">
+  <caption>{{ .Title }}</caption>
+  <tr><th>Time</th><th>Destination</th><th>Track</th><th>Status</th></tr>
+  {{if .Error}}
+    <tr class="error">
+      <td colspan=4>{{.Error.Error}}</td>
+    </tr>
+  {{else}}
+    {{range .Departures}}
+      <tr class="departure">
+        <td>{{.TimeLabel}}</td>
+        <td>{{.Destination}}</td>
+        <td>{{.Track}}</td>
+        <td>{{.Status}}</td>
+      </tr>
+    {{end}}
+  {{end}}
+</table>
