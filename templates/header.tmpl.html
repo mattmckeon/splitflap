@@ -2,6 +2,21 @@
 <title>Splitflap</title>
   <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.3/jquery.min.js"></script>
   <script type="text/javascript" src="//maxcdn.bootstrapcdn.com/bootstrap/3.3.4/js/bootstrap.min.js"></script>
+  <script type="text/javascript" src="static/descrambler.js"></script>
+  <link rel="stylesheet" type="text/css" href="https://fonts.googleapis.com/css?family=VT323">
   <link rel="stylesheet" type="text/css" href="//maxcdn.bootstrapcdn.com/bootstrap/3.3.4/css/bootstrap.min.css" />
   <link rel="stylesheet" type="text/css" href="/static/main.css" />
+  <script>
+	$(document).ready(function() {
+        $(".destination").each(function(index, elt) {
+          $(this).scramble(3000, 100, "alphanumeric", true);
+        })
+        $(".track").each(function(index, elt) {
+          $(this).scramble(1000, 100, "numbers", true);
+        })
+        $(".time").each(function(index, elt) {
+          $(this).scramble(1000, 100, "numbers", true);
+        })
+	  });
+  </script>
 </head>
