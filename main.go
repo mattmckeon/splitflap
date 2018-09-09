@@ -234,10 +234,10 @@ func main() {
 		}
 		client := NewMbtaService(NewHttpClient())
 		northStation := &DepartureBoard{
-			Title: "North Station",
+			Title: "North Station Information",
 		}
 		southStation := &DepartureBoard{
-			Title: "South Station",
+			Title: "South Station Information",
 		}
 		northStation.Departures, northStation.Error = client.ListDepartures(params)
 		params.Stop = "place-sstat"

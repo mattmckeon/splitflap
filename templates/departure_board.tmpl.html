@@ -8,10 +8,10 @@
   {{else}}
     {{range .Departures}}
       <tr class="departure">
-        <td>{{.TimeLabel}}</td>
-        <td>{{.Destination}}</td>
-        <td>{{.Track}}</td>
-        <td>{{.Status}}</td>
+        <td class="time">{{.TimeLabel}}</td>
+        <td class="destination">{{.Destination}}</td>
+        <td class="track">{{.Track}}</td>
+        <td class="status">{{.Status}}</td>
       </tr>
     {{end}}
   {{end}}

@@ -1,9 +1,38 @@
 .main {
     background: black;
-    color: #00FF00;
+    color: #FFF;
 }
 
-.main th, td {
-    padding: 15px;
+table.departureBoard {
+    margin-left: auto;
+    margin-right: auto;
+    margin-bottom: 80px;
+}
+
+.departureBoard caption {
+    font-size: 2em;
+    color: white;
+    text-align: center;
+}
+
+.departureBoard th, td {
+    padding: .3em;
     text-align: left;
+    font-size: 1.5em;
+}
+
+.departureBoard td {
+    color: #f1f442;
+}
+
+.departureBoard .time, .departureBoard .destination {
+    text-transform: uppercase;
+}
+
+.departureBoard .track {
+    text-align: right;
+}
+
+.departureBoard .status {
+    color: #8ff442;
 }
