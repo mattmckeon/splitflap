@@ -1,0 +1,9 @@
+{
+  "errors": [
+    {
+      "status": "429",
+      "detail": "You have exceeded your allowed usage rate.",
+      "code": "rate_limited"
+    }
+  ]
+}

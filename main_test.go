@@ -4,13 +4,16 @@ import (
 	"encoding/json"
 	"os"
 	"io/ioutil"
+	"net/http"
 	"testing"
 	"github.com/stretchr/testify/assert"
+	"gopkg.in/h2non/gock.v1"
 )
 
 func readPredictions() (*ApiV3Response, error) {
 	f, err := os.Open("testdata/predictions.json")
 	if (err != nil) {
+		return nil, err
 	}
 	defer f.Close()
 
@@ -20,8 +23,12 @@ func readPredictions() (*ApiV3Response, error) {
 	return apiResponse, err
 }
 
+
 func TestParse(t *testing.T) {
-	apiResponse, _ := readPredictions()
+	apiResponse, err := readPredictions()
+	if err != nil {
+		assert.FailNow(t, "Failed to open test fixture")
+	}
 	actual, _ := ExtractDepartures(apiResponse)
 
 	expected :=  []Departure {
@@ -32,4 +39,24 @@ func TestParse(t *testing.T) {
 		{"1:20PM", "Forge Park/495", "", "On time"},
 	}
 	assert.Equal(t, expected, actual)
+}
+
+func TestRateLimitError(t *testing.T) {
+	defer gock.Off()
+	f, err := os.Open("testdata/error-429.json")
+	if (err != nil) {
+		assert.FailNow(t, "Failed to open test fixture")
+	}
+
+	gock.New(MbtaApiV3BaseUrl).
+		Get("/predictions").
+		Reply(429).
+		Body(f)
+
+	httpClient := &http.Client{}
+	gock.InterceptClient(httpClient)
+
+	departures, err := NewMbtaService(httpClient).ListDepartures(&Params{})
+	assert.Nil(t, departures)
+	assert.EqualError(t, err, "MBTA API error: You have exceeded your allowed usage rate.")
 }

@@ -79,7 +79,11 @@ type ApiV3Error struct {
 }
 
 func (e ApiV3Error) Error() string {
-	return fmt.Sprintf("MBTA APIv3: %+v", e.Errors)
+	if len(e.Errors) == 1 {
+		return fmt.Sprintf("MBTA API error: %v", e.Errors[0].Detail)
+	} else {
+		return fmt.Sprintf("MBTA API error: %+v", e.Errors)
+	}
 }
 
 // ParseError is used to gather errors resulting from parsing the API response
