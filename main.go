@@ -11,8 +11,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-const baseURL = "https://api-v3.mbta.com/"
+const MbtaApiV3BaseUrl = "https://api-v3.mbta.com/"
 
+// ApiV3Response is the base type used to unmarshall a MBTA APIv3 JSON response.
+// We only define the fields necessary for the query this app is making -
+// fetching predictions, and including routes, stops and trips.
+// The field tags are used by the JSON library to map JSON->struct
 type ApiV3Response struct {
 	Data []struct {
 		Attributes struct {
@@ -62,6 +66,7 @@ type ApiV3Response struct {
 	} `json:"included"`
 }
 
+// ApiV3Error is the base type used to unmarshall an error from MBTA APIv3.
 type ApiV3Error struct {
 	Errors []struct {
 		Status string `json:"status"`
@@ -77,6 +82,8 @@ func (e ApiV3Error) Error() string {
 	return fmt.Sprintf("MBTA APIv3: %+v", e.Errors)
 }
 
+// ParseError is used to gather errors resulting from parsing the API response
+// to generate the departure board rows.
 type ParseError struct {
 	Errors []error
 }
@@ -85,6 +92,8 @@ func (e ParseError) Error() string {
 	return fmt.Sprintf("Parse error: %+v", e.Errors)
 }
 
+// Params defines the query parameters sent via the Sling library.
+// The field tags map each value to a URL parameter.
 type Params struct {
 	MinTime string `url:"filter[min_time],omitempty"`
 	MaxTime string `url:"filter[max_time],omitempty"`
@@ -93,6 +102,7 @@ type Params struct {
 	Sort    string `url:"sort,omitempty"`
 }
 
+// Departure represents each row in our departure board.
 type Departure struct {
 	TimeLabel   string
 	Destination string
@@ -100,30 +110,37 @@ type Departure struct {
 	Status      string
 }
 
+// DepartureBoard encapsulates the title, rows, and any errors for each board.
 type DepartureBoard struct {
-	Title string
+	Title      string
 	Departures []Departure
-	Error error
+	Error      error
 }
 
+// MbtaService wraps the Sling request handle and our underlying http client.
 type MbtaService struct {
 	sling  *sling.Sling
 	client *http.Client
 }
 
+// NewMbtaService creates and returns a new instance of MbtaService
+// (visible so we can pass mocks for testing).
 func NewMbtaService(httpClient *http.Client) *MbtaService {
 	return &MbtaService{
-		sling:  sling.New().Client(httpClient).Base(baseURL),
+		sling:  sling.New().Client(httpClient).Base(MbtaApiV3BaseUrl),
 		client: httpClient,
 	}
 }
 
+// NewHttpClient defines a new HTTP client configured with a timeout,
 func NewHttpClient() *http.Client {
 	return &http.Client{
 		Timeout: time.Second * 10,
 	}
 }
 
+// ExtractDepartures extracts fields from a parsed ApiV3Response and constructs
+// a slice of rows corresponding to upcoming commuter rail departures.
 func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 	trackIndex := make(map[string]string)
 	routeIndex := make(map[string]bool)
@@ -172,6 +189,8 @@ func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 	}
 }
 
+// ListDepartures is an MbtaService method that fetches commuter rail
+// departure board information from the MBTA APIv3 predictions endpoint.
 func (s *MbtaService) ListDepartures(params *Params) ([]Departure, error) {
 	sling := s.sling.New().Path("predictions").QueryStruct(params)
 	// Dump the request to logs for debugging
