@@ -11,7 +11,11 @@
         <td class="time">{{.TimeLabel}}</td>
         <td class="destination">{{.Destination}}</td>
         <td class="track">{{.Track}}</td>
-        <td class="status">{{.Status}}</td>
+        {{if eq .Status "Delayed"}}
+          <td class="status delayed">{{.Status}}</td>
+        {{else}}
+          <td class="status">{{.Status}}</td>
+        {{end}}
       </tr>
     {{end}}
   {{end}}

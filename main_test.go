@@ -13,6 +13,7 @@ func TestParse(t *testing.T) {
 	actual, _ := (&MbtaServiceTest{"testdata/predictions.json"}).ListDepartures("")
 
 	expected := []Departure{
+		{"11:50AM", "Readville", "TBD", ""},
 		{"11:50AM", "Readville", "10", "Now boarding"},
 		{"12:40PM", "Worcester", "TBD", "On time"},
 		{"12:50PM", "Readville", "TBD", "On time"},

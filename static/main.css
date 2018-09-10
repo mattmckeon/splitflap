@@ -46,6 +46,10 @@ table.departureBoard {
     color: #8ff442;
 }
 
+.departureBoard .status.delayed {
+    color: #f45c42;
+}
+
 .departureBoard .error {
     color: #f45c42;
 }

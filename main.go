@@ -21,12 +21,13 @@ const MbtaApiV3BaseUrl = "https://api-v3.mbta.com/"
 // Prediction represents an MBTA API prediction and its relationships.
 // We only define the fields we need to unmarshal from the JSONAPI response.
 type Prediction struct {
-	Id            string `jsonapi:"primary,prediction"`
-	DepartureTime string `jsonapi:"attr,departure_time"`
-	Status        string `jsonapi:"attr,status"`
-	Route         *Route `jsonapi:"relation,route,omitempty"`
-	Trip          *Trip  `jsonapi:"relation,trip,omitempty"`
-	Stop          *Stop  `jsonapi:"relation,stop,omitempty"`
+	Id            string    `jsonapi:"primary,prediction"`
+	DepartureTime string    `jsonapi:"attr,departure_time"`
+	Status        string    `jsonapi:"attr,status"`
+	Route         *Route    `jsonapi:"relation,route,omitempty"`
+	Trip          *Trip     `jsonapi:"relation,trip,omitempty"`
+	Stop          *Stop     `jsonapi:"relation,stop,omitempty"`
+	Schedule      *Schedule `jsonapi:"relation,schedule,omitempty"`
 }
 
 // Route represents a route as defined in the MBTA API.
@@ -35,6 +36,13 @@ type Route struct {
 	Id             string   `jsonapi:"primary,route"`
 	Type           int      `jsonapi:"attr,type"`
 	DirectionNames []string `jsonapi:"attr,direction_names"`
+}
+
+// Schedule represents a scheduled departure or arrival in the MBTA API.
+// We only define the fields we need to unmarshal from the JSONAPI response.
+type Schedule struct {
+	Id            string `jsonapi:"primary,schedule"`
+	DepartureTime string `jsonapi:"attr,departure_time"`
 }
 
 // Stop represents a stop or station as defined in the MBTA API.
@@ -140,7 +148,7 @@ func NewHttpClient() *http.Client {
 func (s *MbtaServiceImpl) ListDepartures(place string) ([]Departure, error) {
 	sling := s.sling.New().Path("predictions").QueryStruct(&Params{
 		Stop:    place,
-		Include: "route,stop,trip",
+		Include: "route,stop,trip,schedule",
 		Sort:    "departure_time",
 	})
 
@@ -205,7 +213,7 @@ func (s *MbtaServiceTest) ListDepartures(place string) ([]Departure, error) {
 }
 
 // AsPredictions casts the raw unmarshalled JSON payload to the correct type.
-func AsPredictions(rawPredictions []interface{}) ([]*Prediction) {
+func AsPredictions(rawPredictions []interface{}) []*Prediction {
 	predictions := make([]*Prediction, len(rawPredictions))
 	for i := range rawPredictions {
 		predictions[i] = rawPredictions[i].(*Prediction)
@@ -216,32 +224,37 @@ func AsPredictions(rawPredictions []interface{}) ([]*Prediction) {
 // ExtractDepartures is a helper function that extracts fields from an
 // unmarshalled JSONAPI payload and returns a slice of rows corresponding to
 // upcoming commuter rail departures. It assumes that the payload is a slice of
-// pointers to 
+// pointers to
 func ExtractDepartures(predictions []*Prediction) ([]Departure, error) {
 	departures := []Departure{}
 	parseError := new(ParseError)
-	for _, prediction := range predictions  {
+	for _, prediction := range predictions {
 		// We only want trains that match the following:
 		// ✔ Have a valid departure time
 		// ✔ Have a valid status
 		// ✔ On a commuter rail route (route.type == 2)
-		// ✔ Are on an outbound trip			
+		// ✔ Are on an outbound trip
 		if prediction.DepartureTime != "" &&
-			prediction.Status != "" &&
 			prediction.Route.Type == 2 &&
 			prediction.Route.DirectionNames[prediction.Trip.DirectionId] == "Outbound" {
-
 			d := Departure{}
 			d.Destination = prediction.Trip.Headsign
-			t, err := time.Parse(time.RFC3339, prediction.DepartureTime)
-			if err == nil {
-				d.TimeLabel = t.Format("3:04PM")
+			pt, pterr := time.Parse(time.RFC3339, prediction.DepartureTime)
+			if pterr == nil {
+				d.TimeLabel = pt.Format("3:04PM")
 			} else {
 				err := fmt.Errorf("(Parse Error) %s", prediction.DepartureTime)
 				parseError.Errors = append(parseError.Errors, err)
 				d.TimeLabel = err.Error()
 			}
 			d.Status = prediction.Status
+			if d.Status == "" && pterr == nil && prediction.Schedule != nil {
+				// It's possible this is a delayed train, and we should reflect that.
+				st, sterr := time.Parse(time.RFC3339, prediction.Schedule.DepartureTime)
+				if sterr == nil && pt.After(st) {
+					d.Status = "Delayed"
+				}
+			}
 			d.Track = prediction.Stop.PlatformCode
 			if d.Track == "" {
 				d.Track = "TBD"
@@ -295,7 +308,7 @@ func main() {
 	// A test route that returns canned prediction data.
 	// Useful for tweaking CSS changes.
 	router.GET("/test", func(c *gin.Context) {
-		Render(c, &MbtaServiceTest{"testdata/predictions.json"})
+		Render(c, &MbtaServiceTest{"testdata/predictions-delayed.json"})
 	})
 
 	// A test route that returns an API error.
