@@ -1,42 +1,23 @@
 package main
 
 import (
-	"encoding/json"
-	"os"
-	"io/ioutil"
 	"net/http"
+	"os"
 	"testing"
+
 	"github.com/stretchr/testify/assert"
 	"gopkg.in/h2non/gock.v1"
 )
 
-func readPredictions() (*ApiV3Response, error) {
-	f, err := os.Open("testdata/predictions.json")
-	if (err != nil) {
-		return nil, err
-	}
-	defer f.Close()
-
-	byteValue, err := ioutil.ReadAll(f)
-	var apiResponse = new(ApiV3Response)
-	err = json.Unmarshal(byteValue, apiResponse)
-	return apiResponse, err
-}
-
-
 func TestParse(t *testing.T) {
-	apiResponse, err := readPredictions()
-	if err != nil {
-		assert.FailNow(t, "Failed to open test fixture")
-	}
-	actual, _ := ExtractDepartures(apiResponse)
+	actual, _ := (&MbtaServiceTest{"testdata/predictions.json"}).ListDepartures("")
 
-	expected :=  []Departure {
+	expected := []Departure{
 		{"11:50AM", "Readville", "10", "Now boarding"},
-		{"12:40PM", "Worcester", "", "On time"},
-		{"12:50PM", "Readville", "",  "On time"},
-		{"1:05PM", "Providence", "", "On time"},
-		{"1:20PM", "Forge Park/495", "", "On time"},
+		{"12:40PM", "Worcester", "TBD", "On time"},
+		{"12:50PM", "Readville", "TBD", "On time"},
+		{"1:05PM", "Providence", "TBD", "On time"},
+		{"1:20PM", "Forge Park/495", "TBD", "On time"},
 	}
 	assert.Equal(t, expected, actual)
 }
@@ -44,7 +25,7 @@ func TestParse(t *testing.T) {
 func TestRateLimitError(t *testing.T) {
 	defer gock.Off()
 	f, err := os.Open("testdata/error-429.json")
-	if (err != nil) {
+	if err != nil {
 		assert.FailNow(t, "Failed to open test fixture")
 	}
 
@@ -56,7 +37,7 @@ func TestRateLimitError(t *testing.T) {
 	httpClient := &http.Client{}
 	gock.InterceptClient(httpClient)
 
-	departures, err := NewMbtaService(httpClient).ListDepartures(&Params{})
+	departures, err := NewMbtaServiceImpl(httpClient).ListDepartures("")
 	assert.Nil(t, departures)
 	assert.EqualError(t, err, "MBTA API error: You have exceeded your allowed usage rate.")
 }

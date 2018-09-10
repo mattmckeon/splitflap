@@ -2,8 +2,8 @@
   <caption>{{ .Title }}</caption>
   <tr><th>Time</th><th>Destination</th><th>Track</th><th>Status</th></tr>
   {{if .Error}}
-    <tr class="error">
-      <td colspan=4>{{.Error.Error}}</td>
+    <tr class="departure">
+      <td class="error" colspan=4>{{.Error.Error}}</td>
     </tr>
   {{else}}
     {{range .Departures}}

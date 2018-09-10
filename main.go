@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -78,6 +80,7 @@ type ApiV3Error struct {
 	} `json:"errors"`
 }
 
+// Error implements the Golang error interface for ApiV3Error.
 func (e ApiV3Error) Error() string {
 	if len(e.Errors) == 1 {
 		return fmt.Sprintf("MBTA API error: %v", e.Errors[0].Detail)
@@ -92,6 +95,7 @@ type ParseError struct {
 	Errors []error
 }
 
+// Error implements the Golang error interface for ParseError.
 func (e ParseError) Error() string {
 	return fmt.Sprintf("Parse error: %+v", e.Errors)
 }
@@ -99,8 +103,6 @@ func (e ParseError) Error() string {
 // Params defines the query parameters sent via the Sling library.
 // The field tags map each value to a URL parameter.
 type Params struct {
-	MinTime string `url:"filter[min_time],omitempty"`
-	MaxTime string `url:"filter[max_time],omitempty"`
 	Stop    string `url:"filter[stop],omitempty"`
 	Include string `url:"include,omitempty"`
 	Sort    string `url:"sort,omitempty"`
@@ -121,36 +123,108 @@ type DepartureBoard struct {
 	Error      error
 }
 
-// MbtaService wraps the Sling request handle and our underlying http client.
-type MbtaService struct {
+// MbtaService is a base interface for fetching and parsing departures.
+type MbtaService interface {
+	ListDepartures(place string) ([]Departure, error)
+}
+
+// MbtaServiceImpl wraps the Sling request handle and underlying http client.
+type MbtaServiceImpl struct {
 	sling  *sling.Sling
 	client *http.Client
 }
 
-// NewMbtaService creates and returns a new instance of MbtaService
+// NewMbtaServiceImpl creates and returns a new instance of MbtaServiceImpl
 // (visible so we can pass mocks for testing).
-func NewMbtaService(httpClient *http.Client) *MbtaService {
-	return &MbtaService{
+func NewMbtaServiceImpl(httpClient *http.Client) *MbtaServiceImpl {
+	return &MbtaServiceImpl{
 		sling:  sling.New().Client(httpClient).Base(MbtaApiV3BaseUrl),
 		client: httpClient,
 	}
 }
 
-// NewHttpClient defines a new HTTP client configured with a timeout,
+// NewHttpClient creates a new HTTP client configured with a timeout.
 func NewHttpClient() *http.Client {
 	return &http.Client{
 		Timeout: time.Second * 10,
 	}
 }
 
-// ExtractDepartures extracts fields from a parsed ApiV3Response and constructs
-// a slice of rows corresponding to upcoming commuter rail departures.
+// ListDepartures is an implementation of the MbtaService ListDepartures method
+// that fetches commuter departure board information from the MBTA APIv3
+// predictions endpoint.
+func (s *MbtaServiceImpl) ListDepartures(place string) ([]Departure, error) {
+	sling := s.sling.New().Path("predictions").QueryStruct(&Params{
+		Stop:    place,
+		Include: "route,stop,trip",
+		Sort:    "departure_time",
+	})
+
+	// Dump the request to logs for debugging
+	req, err := sling.Request()
+	fmt.Printf("request: %v", req)
+
+	apiResponse := new(ApiV3Response)
+	apiError := new(ApiV3Error)
+	_, err = sling.Receive(apiResponse, apiError)
+	if err == nil {
+		err = apiError
+	}
+	if err == apiError && len(apiError.Errors) == 0 {
+		return ExtractDepartures(apiResponse)
+	} else {
+		return nil, err
+	}
+}
+
+// MbtaServiceTest is a test version of MbtaService useful for testing with
+// canonical, non-live test responses from the API.
+type MbtaServiceTest struct {
+	JsonFile string
+}
+
+// ListDepartures is an implementation of the MbtaService ListDepartures method
+// that ignores the provided place and loads test data from this test service's
+// JsonFile.
+func (s *MbtaServiceTest) ListDepartures(place string) ([]Departure, error) {
+	f, err := os.Open(s.JsonFile)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	byteValue, err := ioutil.ReadAll(f)
+	var apiError = new(ApiV3Error)
+	err = json.Unmarshal(byteValue, apiError)
+	if err != nil {
+		return nil, err
+	}
+	if len(apiError.Errors) > 0 {
+		return nil, apiError
+	}
+	var apiResponse = new(ApiV3Response)
+	err = json.Unmarshal(byteValue, apiResponse)
+
+	if err != nil {
+		return nil, err
+	}
+	return ExtractDepartures(apiResponse)
+}
+
+// ExtractDepartures is a helper function that extracts fields from a parsed
+// ApiV3Response and a slice of rows corresponding to upcoming commuter rail
+// departures.
 func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
+	// First we build indices of the fields we need from included values
+	// in order to build the rows. Each of these indices maps from entity id
+	// to field value.
 	trackIndex := make(map[string]string)
 	routeIndex := make(map[string]bool)
 	destinationIndex := make(map[string]string)
 	for _, entry := range apiResponse.Included {
-		// Only index commuter rail routes so we can filter predictions.
+		// We just need to filter predictions by whether or not they're
+		// on a Commuter Rail route, so check the type and only index
+		// if it's the commuter rail (type 2).
 		if entry.Type == "route" && entry.Attributes.RouteType == 2 {
 			routeIndex[entry.Id] = true
 		}
@@ -162,13 +236,14 @@ func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 		}
 	}
 
+	// Next iterate through our results and build the departure board rows.
 	parseError := new(ParseError)
 	departures := []Departure{}
 	for _, result := range apiResponse.Data {
 		// Don't show trains for which we don't have a prediction or status
 		if result.Attributes.DepartureTime != "" && result.Attributes.Status != "" {
 			// Our route index only includes commuter rail trains;
-			// we can skip anything that isn't in the index (e.g. green line etc)
+			// we can skip anything that isn't in the index (e.g. green line etc).
 			if _, ok := routeIndex[result.Relationships.Route.Data.Id]; ok {
 				d := Departure{}
 				d.Destination = destinationIndex[result.Relationships.Trip.Data.Id]
@@ -182,6 +257,9 @@ func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 				}
 				d.Status = result.Attributes.Status
 				d.Track = trackIndex[result.Relationships.Stop.Data.Id]
+				if d.Track == "" {
+					d.Track = "TBD"
+				}
 				departures = append(departures, d)
 			}
 		}
@@ -193,25 +271,23 @@ func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 	}
 }
 
-// ListDepartures is an MbtaService method that fetches commuter rail
-// departure board information from the MBTA APIv3 predictions endpoint.
-func (s *MbtaService) ListDepartures(params *Params) ([]Departure, error) {
-	sling := s.sling.New().Path("predictions").QueryStruct(params)
-	// Dump the request to logs for debugging
-	req, err := sling.Request()
-	fmt.Printf("request: %v", req)
-
-	apiResponse := new(ApiV3Response)
-	apiError := new(ApiV3Error)
-	_, err = sling.Receive(apiResponse, apiError)
-	if err == nil {
-		err = apiError
+// Render is a helper function that fetches departures from the given service
+// and outputs the corresponding HTML to the gin Context.
+func Render(c *gin.Context, client MbtaService) {
+	northStation := &DepartureBoard{
+		Title: "North Station Information",
 	}
-	if len(apiError.Errors) == 0 {
-		return ExtractDepartures(apiResponse)
-	} else {
-		return nil, err
+	southStation := &DepartureBoard{
+		Title: "South Station Information",
 	}
+	northStation.Departures, northStation.Error =
+		client.ListDepartures("place-north")
+	southStation.Departures, southStation.Error =
+		client.ListDepartures("place-sstat")
+	c.HTML(http.StatusOK, "index.tmpl.html", gin.H{
+		"northStation": northStation,
+		"southStation": southStation,
+	})
 }
 
 func main() {
@@ -226,26 +302,21 @@ func main() {
 	router.LoadHTMLGlob("templates/*.tmpl.html")
 	router.Static("/static", "static")
 
+	// The main route
 	router.GET("/", func(c *gin.Context) {
-		params := &Params{
-			Stop:    "place-north",
-			Include: "route,stop,trip",
-			Sort:    "departure_time",
-		}
-		client := NewMbtaService(NewHttpClient())
-		northStation := &DepartureBoard{
-			Title: "North Station Information",
-		}
-		southStation := &DepartureBoard{
-			Title: "South Station Information",
-		}
-		northStation.Departures, northStation.Error = client.ListDepartures(params)
-		params.Stop = "place-sstat"
-		southStation.Departures, southStation.Error = client.ListDepartures(params)
-		c.HTML(http.StatusOK, "index.tmpl.html", gin.H{
-			"northStation": northStation,
-			"southStation": southStation,
-		})
+		Render(c, NewMbtaServiceImpl(NewHttpClient()))
+	})
+
+	// A test route that returns canned prediction data.
+	// Useful for tweaking CSS changes.
+	router.GET("/test", func(c *gin.Context) {
+		Render(c, &MbtaServiceTest{"testdata/predictions.json"})
+	})
+
+	// A test route that returns an API error.
+	// Useful for tweaking CSS changes.
+	router.GET("/testerror", func(c *gin.Context) {
+		Render(c, &MbtaServiceTest{"testdata/error-429.json"})
 	})
 
 	router.Run(":" + port)

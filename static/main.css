@@ -15,11 +15,13 @@ table.departureBoard {
     font-size: 4em;
     color: white;
     text-align: center;
+    white-space: nowrap;
 }
 
 .departureBoard th, td {
     padding: .3em;
     text-align: left;
+    white-space: nowrap;
 }
 
 .departureBoard th {
@@ -42,6 +44,10 @@ table.departureBoard {
 
 .departureBoard .status {
     color: #8ff442;
+}
+
+.departureBoard .error {
+    color: #f45c42;
 }
 
 
