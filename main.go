@@ -212,8 +212,8 @@ func (s *MbtaServiceTest) ListDepartures(place string) ([]Departure, error) {
 }
 
 // ExtractDepartures is a helper function that extracts fields from a parsed
-// ApiV3Response and a slice of rows corresponding to upcoming commuter rail
-// departures.
+// ApiV3Response and returns a slice of rows corresponding to upcoming commuter
+// rail departures.
 func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 	// First we build indices of the fields we need from included values
 	// in order to build the rows. Each of these indices maps from entity id
