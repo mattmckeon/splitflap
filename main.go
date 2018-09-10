@@ -161,10 +161,10 @@ func (s *MbtaServiceImpl) ListDepartures(place string) ([]Departure, error) {
 				err = apiError
 			}
 		} else {
-			predictions, err := jsonapi.UnmarshalManyPayload(
+			rawPredictions, err := jsonapi.UnmarshalManyPayload(
 				resp.Body, reflect.TypeOf(new(Prediction)))
 			if err == nil {
-				return ExtractDepartures(predictions)
+				return ExtractDepartures(AsPredictions(rawPredictions))
 			}
 		}
 	}
@@ -196,49 +196,57 @@ func (s *MbtaServiceTest) ListDepartures(place string) ([]Departure, error) {
 	if len(apiError.Errors) > 0 {
 		return nil, apiError
 	}
-	predictions, err := jsonapi.UnmarshalManyPayload(
+	rawPredictions, err := jsonapi.UnmarshalManyPayload(
 		bytes.NewReader(byteValue), reflect.TypeOf(new(Prediction)))
 	if err == nil {
-		return ExtractDepartures(predictions)
+		return ExtractDepartures(AsPredictions(rawPredictions))
 	}
 	return nil, err
 }
 
-// ExtractDepartures is a helper function that extracts fields from a parsed
-// ApiV3Response and returns a slice of rows corresponding to upcoming commuter
-// rail departures.
-func ExtractDepartures(rawPredictions []interface{}) ([]Departure, error) {
+// AsPredictions casts the raw unmarshalled JSON payload to the correct type.
+func AsPredictions(rawPredictions []interface{}) ([]*Prediction) {
+	predictions := make([]*Prediction, len(rawPredictions))
+	for i := range rawPredictions {
+		predictions[i] = rawPredictions[i].(*Prediction)
+	}
+	return predictions
+}
+
+// ExtractDepartures is a helper function that extracts fields from an
+// unmarshalled JSONAPI payload and returns a slice of rows corresponding to
+// upcoming commuter rail departures. It assumes that the payload is a slice of
+// pointers to 
+func ExtractDepartures(predictions []*Prediction) ([]Departure, error) {
 	departures := []Departure{}
 	parseError := new(ParseError)
-	for _, rawPrediction := range rawPredictions {
-		if prediction, ok := rawPrediction.(*Prediction); ok {
-			// We only want the following trains:
-			// ✔ Have a valid departure time
-			// ✔ Have a valid status
-			// ✔ On a commuter rail route (route.type == 2)
-			// ✔ Are on an outbound trip			
-			if prediction.DepartureTime != "" &&
-				prediction.Status != "" &&
-				prediction.Route.Type == 2 &&
-				prediction.Route.DirectionNames[prediction.Trip.DirectionId] == "Outbound" {
+	for _, prediction := range predictions  {
+		// We only want trains that match the following:
+		// ✔ Have a valid departure time
+		// ✔ Have a valid status
+		// ✔ On a commuter rail route (route.type == 2)
+		// ✔ Are on an outbound trip			
+		if prediction.DepartureTime != "" &&
+			prediction.Status != "" &&
+			prediction.Route.Type == 2 &&
+			prediction.Route.DirectionNames[prediction.Trip.DirectionId] == "Outbound" {
 
-				d := Departure{}
-				d.Destination = prediction.Trip.Headsign
-				t, err := time.Parse(time.RFC3339, prediction.DepartureTime)
-				if err == nil {
-					d.TimeLabel = t.Format("3:04PM")
-				} else {
-					err := fmt.Errorf("(Parse Error) %s", prediction.DepartureTime)
-					parseError.Errors = append(parseError.Errors, err)
-					d.TimeLabel = err.Error()
-				}
-				d.Status = prediction.Status
-				d.Track = prediction.Stop.PlatformCode
-				if d.Track == "" {
-					d.Track = "TBD"
-				}
-				departures = append(departures, d)
+			d := Departure{}
+			d.Destination = prediction.Trip.Headsign
+			t, err := time.Parse(time.RFC3339, prediction.DepartureTime)
+			if err == nil {
+				d.TimeLabel = t.Format("3:04PM")
+			} else {
+				err := fmt.Errorf("(Parse Error) %s", prediction.DepartureTime)
+				parseError.Errors = append(parseError.Errors, err)
+				d.TimeLabel = err.Error()
 			}
+			d.Status = prediction.Status
+			d.Track = prediction.Stop.PlatformCode
+			if d.Track == "" {
+				d.Track = "TBD"
+			}
+			departures = append(departures, d)
 		}
 	}
 	if len(parseError.Errors) > 0 {
