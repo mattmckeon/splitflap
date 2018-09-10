@@ -45,27 +45,35 @@ type ApiV3Response struct {
 		Id string `json:"id"`
 	} `json:"data"`
 	Included []struct {
-		Attributes struct {
-			// This is pretty hacky - we're basically merging the three
-			// different types we could be getting back in the included list
-			// (routes, trips and stops). Go has great support for parsing
-			// of well-formed and strongly typed JSON object graphs,
-			// and OK support for generic handling of simple and shallow
-			// JSON responses. Things get hairy though when we have deeply
-			// nested polymorphic trees like this one - you need to cast
-			// at each step of the path during lookup. There are several
-			// JSONpath libraries but they seem to be focused on fetching single
-			// values, and are a poor fit for this sort of thing where
-			// we're trying to cross-reference relationships.
-			// I tried a couple of different approaches and this seemed the
-			// least bad.
-			Headsign     string `json:"headsign"`
-			PlatformCode string `json:"platform_code"`
-			RouteType    int    `json:"type"`
-		} `json:"attributes"`
-		Type string `json:"type"`
-		Id   string `json:"id"`
+		Attributes IncludedAttributes `json:"attributes"`
+		Type       string             `json:"type"`
+		Id         string             `json:"id"`
 	} `json:"included"`
+}
+
+// IncludedAttributes is a merge of the relevant attributes of all
+// related objects we might retrieve from our query. This is pretty hacky -
+// we're basically using the same object to represent all the attributes
+// we care about from three different types (routes, trips and stops).
+// This is mostly because of an impedance mismatch between the jsonapi.org
+// standard and the mechanism by which Golang supports JSON unmarshalling.
+// Go's encoding/json package is biased towards well-formed and strongly typed
+// JSON object graphs, and has OK support for generic handling of simple and
+// shallow JSON responses. Things get hairy though when we have deeply nested
+// polymorphic trees like the JSON API's included list - you need to cast at
+// each step of the path when looking up a value. There's a JSONAPI Golang
+// library, but it's really intended for services and not clients - there's
+// no good way to handle errors, for example. Meanwhile there are several Go
+// JSONpath libraries but they seem to be focused on fetching single values,
+// and are a poor fit for this sort of thing where we're trying to cross-
+// reference relationships. I tried a couple of different approaches and this
+// seemed the least bad.
+type IncludedAttributes struct {
+	Headsign       string   `json:"headsign"`
+	PlatformCode   string   `json:"platform_code"`
+	RouteType      int      `json:"type"`
+	DirectionId    int      `json:"direction_id"`
+	DirectionNames []string `json:"direction_names"`
 }
 
 // ApiV3Error is the base type used to unmarshall an error from MBTA APIv3.
@@ -215,24 +223,27 @@ func (s *MbtaServiceTest) ListDepartures(place string) ([]Departure, error) {
 // ApiV3Response and returns a slice of rows corresponding to upcoming commuter
 // rail departures.
 func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
-	// First we build indices of the fields we need from included values
-	// in order to build the rows. Each of these indices maps from entity id
-	// to field value.
+	// First we build indices of our included objects in order to build the rows.
+	// Each of these indices maps from entity id to field value.
 	trackIndex := make(map[string]string)
 	routeIndex := make(map[string]bool)
 	destinationIndex := make(map[string]string)
+	directionIdIndex := make(map[string]int)
+	directionNamesIndex := make(map[string][]string)
 	for _, entry := range apiResponse.Included {
 		// We just need to filter predictions by whether or not they're
 		// on a Commuter Rail route, so check the type and only index
 		// if it's the commuter rail (type 2).
 		if entry.Type == "route" && entry.Attributes.RouteType == 2 {
 			routeIndex[entry.Id] = true
+			directionNamesIndex[entry.Id] = entry.Attributes.DirectionNames
 		}
 		if entry.Type == "stop" {
 			trackIndex[entry.Id] = entry.Attributes.PlatformCode
 		}
 		if entry.Type == "trip" {
 			destinationIndex[entry.Id] = entry.Attributes.Headsign
+			directionIdIndex[entry.Id] = entry.Attributes.DirectionId
 		}
 	}
 
@@ -242,25 +253,34 @@ func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
 	for _, result := range apiResponse.Data {
 		// Don't show trains for which we don't have a prediction or status
 		if result.Attributes.DepartureTime != "" && result.Attributes.Status != "" {
+			routeId := result.Relationships.Route.Data.Id
+			tripId := result.Relationships.Trip.Data.Id
 			// Our route index only includes commuter rail trains;
 			// we can skip anything that isn't in the index (e.g. green line etc).
-			if _, ok := routeIndex[result.Relationships.Route.Data.Id]; ok {
-				d := Departure{}
-				d.Destination = destinationIndex[result.Relationships.Trip.Data.Id]
-				t, err := time.Parse(time.RFC3339, result.Attributes.DepartureTime)
-				if err == nil {
-					d.TimeLabel = t.Format("3:04PM")
-				} else {
-					err := fmt.Errorf("(Parse Error) %s", result.Attributes.DepartureTime)
-					parseError.Errors = append(parseError.Errors, err)
-					d.TimeLabel = err.Error()
+			if _, ok := routeIndex[routeId]; ok {
+				// Only show outbound predictions.
+				if directionNames, ok := directionNamesIndex[routeId]; ok {
+					if directionId, ok := directionIdIndex[tripId]; ok {
+						if directionNames[directionId] == "Outbound" {
+							d := Departure{}
+							d.Destination = destinationIndex[tripId]
+							t, err := time.Parse(time.RFC3339, result.Attributes.DepartureTime)
+							if err == nil {
+								d.TimeLabel = t.Format("3:04PM")
+							} else {
+								err := fmt.Errorf("(Parse Error) %s", result.Attributes.DepartureTime)
+								parseError.Errors = append(parseError.Errors, err)
+								d.TimeLabel = err.Error()
+							}
+							d.Status = result.Attributes.Status
+							d.Track = trackIndex[result.Relationships.Stop.Data.Id]
+							if d.Track == "" {
+								d.Track = "TBD"
+							}
+							departures = append(departures, d)
+						}
+					}
 				}
-				d.Status = result.Attributes.Status
-				d.Track = trackIndex[result.Relationships.Stop.Data.Id]
-				if d.Track == "" {
-					d.Track = "TBD"
-				}
-				departures = append(departures, d)
 			}
 		}
 	}
@@ -310,7 +330,7 @@ func main() {
 	// A test route that returns canned prediction data.
 	// Useful for tweaking CSS changes.
 	router.GET("/test", func(c *gin.Context) {
-		Render(c, &MbtaServiceTest{"testdata/predictions.json"})
+		Render(c, &MbtaServiceTest{"testdata/morning-predictions.json"})
 	})
 
 	// A test route that returns an API error.
