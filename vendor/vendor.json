@@ -57,6 +57,12 @@
 			"revisionTime": "2017-01-11T10:11:55Z"
 		},
 		{
+			"checksumSHA1": "sDLkT0eMvyW6u9UJPXn4/qjkdnw=",
+			"path": "github.com/google/jsonapi",
+			"revision": "3b9f84a311d8b9bae45e87f1cb8d03e789191b40",
+			"revisionTime": "2018-08-21T21:31:52Z"
+		},
+		{
 			"checksumSHA1": "WqeEgS7pqqkwK8mlrAZmDgtWJMY=",
 			"path": "github.com/json-iterator/go",
 			"revision": "1624edc4454b8682399def8740d46db5e4362ba4",

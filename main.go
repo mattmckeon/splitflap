@@ -1,79 +1,55 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
+	"reflect"
 	"time"
 
 	"github.com/dghubble/sling"
 	"github.com/gin-gonic/gin"
+	"github.com/google/jsonapi"
 )
 
 const MbtaApiV3BaseUrl = "https://api-v3.mbta.com/"
 
-// ApiV3Response is the base type used to unmarshall a MBTA APIv3 JSON response.
-// We only define the fields necessary for the query this app is making -
-// fetching predictions, and including routes, stops and trips.
-// The field tags are used by the JSON library to map JSON->struct
-type ApiV3Response struct {
-	Data []struct {
-		Attributes struct {
-			DepartureTime string `json:"departure_time"`
-			Status        string `json:"status"`
-		} `json:"attributes"`
-		Relationships struct {
-			Route struct {
-				Data struct {
-					Id string `json:"id"`
-				} `json:"data"`
-			} `json:"route"`
-			Stop struct {
-				Data struct {
-					Id string `json:"id"`
-				} `json:"data"`
-			} `json:"stop"`
-			Trip struct {
-				Data struct {
-					Id string `json:"id"`
-				} `json:"data"`
-			} `json:"trip"`
-		} `json:"relationships"`
-		Id string `json:"id"`
-	} `json:"data"`
-	Included []struct {
-		Attributes IncludedAttributes `json:"attributes"`
-		Type       string             `json:"type"`
-		Id         string             `json:"id"`
-	} `json:"included"`
+// Prediction represents an MBTA API prediction and its relationships.
+// We only define the fields we need to unmarshal from the JSONAPI response.
+type Prediction struct {
+	Id            string `jsonapi:"primary,prediction"`
+	DepartureTime string `jsonapi:"attr,departure_time"`
+	Status        string `jsonapi:"attr,status"`
+	Route         *Route `jsonapi:"relation,route,omitempty"`
+	Trip          *Trip  `jsonapi:"relation,trip,omitempty"`
+	Stop          *Stop  `jsonapi:"relation,stop,omitempty"`
 }
 
-// IncludedAttributes is a merge of the relevant attributes of all
-// related objects we might retrieve from our query. This is pretty hacky -
-// we're basically using the same object to represent all the attributes
-// we care about from three different types (routes, trips and stops).
-// This is mostly because of an impedance mismatch between the jsonapi.org
-// standard and the mechanism by which Golang supports JSON unmarshalling.
-// Go's encoding/json package is biased towards well-formed and strongly typed
-// JSON object graphs, and has OK support for generic handling of simple and
-// shallow JSON responses. Things get hairy though when we have deeply nested
-// polymorphic trees like the JSON API's included list - you need to cast at
-// each step of the path when looking up a value. There's a JSONAPI Golang
-// library, but it's really intended for services and not clients - there's
-// no good way to handle errors, for example. Meanwhile there are several Go
-// JSONpath libraries but they seem to be focused on fetching single values,
-// and are a poor fit for this sort of thing where we're trying to cross-
-// reference relationships. I tried a couple of different approaches and this
-// seemed the least bad.
-type IncludedAttributes struct {
-	Headsign       string   `json:"headsign"`
-	PlatformCode   string   `json:"platform_code"`
-	RouteType      int      `json:"type"`
-	DirectionId    int      `json:"direction_id"`
-	DirectionNames []string `json:"direction_names"`
+// Route represents a route as defined in the MBTA API.
+// We only define the fields we need to unmarshal from the JSONAPI response.
+type Route struct {
+	Id             string   `jsonapi:"primary,route"`
+	Type           int      `jsonapi:"attr,type"`
+	DirectionNames []string `jsonapi:"attr,direction_names"`
+}
+
+// Stop represents a stop or station as defined in the MBTA API.
+// We only define the fields we need to unmarshal from the JSONAPI response.
+type Stop struct {
+	Id           string `jsonapi:"primary,stop"`
+	PlatformCode string `jsonapi:"attr,platform_code"`
+}
+
+// Trip represents a journey as defined in the MBTA API.
+// We only define the fields we need to unmarshal from the JSONAPI response.
+type Trip struct {
+	Id          string `jsonapi:"primary,trip"`
+	Headsign    string `jsonapi:"attr,headsign"`
+	DirectionId int    `jsonapi:"attr,direction_id"`
 }
 
 // ApiV3Error is the base type used to unmarshall an error from MBTA APIv3.
@@ -172,17 +148,27 @@ func (s *MbtaServiceImpl) ListDepartures(place string) ([]Departure, error) {
 	req, err := sling.Request()
 	fmt.Printf("request: %v", req)
 
-	apiResponse := new(ApiV3Response)
-	apiError := new(ApiV3Error)
-	_, err = sling.Receive(apiResponse, apiError)
+	// Unfortunately the Golang JSONAPI library is intended for services, so the
+	// response parsing doesn't handle errors as gracefully as we'd like.
+	// We need to check the status code and try to unmarshall any errors we find.
+	resp, err := s.client.Do(req)
 	if err == nil {
-		err = apiError
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			var apiError = new(ApiV3Error)
+			err = json.NewDecoder(resp.Body).Decode(apiError)
+			if err == nil {
+				err = apiError
+			}
+		} else {
+			predictions, err := jsonapi.UnmarshalManyPayload(
+				resp.Body, reflect.TypeOf(new(Prediction)))
+			if err == nil {
+				return ExtractDepartures(predictions)
+			}
+		}
 	}
-	if err == apiError && len(apiError.Errors) == 0 {
-		return ExtractDepartures(apiResponse)
-	} else {
-		return nil, err
-	}
+	return nil, err
 }
 
 // MbtaServiceTest is a test version of MbtaService useful for testing with
@@ -210,77 +196,48 @@ func (s *MbtaServiceTest) ListDepartures(place string) ([]Departure, error) {
 	if len(apiError.Errors) > 0 {
 		return nil, apiError
 	}
-	var apiResponse = new(ApiV3Response)
-	err = json.Unmarshal(byteValue, apiResponse)
-
-	if err != nil {
-		return nil, err
+	predictions, err := jsonapi.UnmarshalManyPayload(
+		bytes.NewReader(byteValue), reflect.TypeOf(new(Prediction)))
+	if err == nil {
+		return ExtractDepartures(predictions)
 	}
-	return ExtractDepartures(apiResponse)
+	return nil, err
 }
 
 // ExtractDepartures is a helper function that extracts fields from a parsed
 // ApiV3Response and returns a slice of rows corresponding to upcoming commuter
 // rail departures.
-func ExtractDepartures(apiResponse *ApiV3Response) ([]Departure, error) {
-	// First we build indices of our included objects in order to build the rows.
-	// Each of these indices maps from entity id to field value.
-	trackIndex := make(map[string]string)
-	routeIndex := make(map[string]bool)
-	destinationIndex := make(map[string]string)
-	directionIdIndex := make(map[string]int)
-	directionNamesIndex := make(map[string][]string)
-	for _, entry := range apiResponse.Included {
-		// We just need to filter predictions by whether or not they're
-		// on a Commuter Rail route, so check the type and only index
-		// if it's the commuter rail (type 2).
-		if entry.Type == "route" && entry.Attributes.RouteType == 2 {
-			routeIndex[entry.Id] = true
-			directionNamesIndex[entry.Id] = entry.Attributes.DirectionNames
-		}
-		if entry.Type == "stop" {
-			trackIndex[entry.Id] = entry.Attributes.PlatformCode
-		}
-		if entry.Type == "trip" {
-			destinationIndex[entry.Id] = entry.Attributes.Headsign
-			directionIdIndex[entry.Id] = entry.Attributes.DirectionId
-		}
-	}
-
-	// Next iterate through our results and build the departure board rows.
-	parseError := new(ParseError)
+func ExtractDepartures(rawPredictions []interface{}) ([]Departure, error) {
 	departures := []Departure{}
-	for _, result := range apiResponse.Data {
-		// Don't show trains for which we don't have a prediction or status
-		if result.Attributes.DepartureTime != "" && result.Attributes.Status != "" {
-			routeId := result.Relationships.Route.Data.Id
-			tripId := result.Relationships.Trip.Data.Id
-			// Our route index only includes commuter rail trains;
-			// we can skip anything that isn't in the index (e.g. green line etc).
-			if _, ok := routeIndex[routeId]; ok {
-				// Only show outbound predictions.
-				if directionNames, ok := directionNamesIndex[routeId]; ok {
-					if directionId, ok := directionIdIndex[tripId]; ok {
-						if directionNames[directionId] == "Outbound" {
-							d := Departure{}
-							d.Destination = destinationIndex[tripId]
-							t, err := time.Parse(time.RFC3339, result.Attributes.DepartureTime)
-							if err == nil {
-								d.TimeLabel = t.Format("3:04PM")
-							} else {
-								err := fmt.Errorf("(Parse Error) %s", result.Attributes.DepartureTime)
-								parseError.Errors = append(parseError.Errors, err)
-								d.TimeLabel = err.Error()
-							}
-							d.Status = result.Attributes.Status
-							d.Track = trackIndex[result.Relationships.Stop.Data.Id]
-							if d.Track == "" {
-								d.Track = "TBD"
-							}
-							departures = append(departures, d)
-						}
-					}
+	parseError := new(ParseError)
+	for _, rawPrediction := range rawPredictions {
+		if prediction, ok := rawPrediction.(*Prediction); ok {
+			// We only want the following trains:
+			// ✔ Have a valid departure time
+			// ✔ Have a valid status
+			// ✔ On a commuter rail route (route.type == 2)
+			// ✔ Are on an outbound trip			
+			if prediction.DepartureTime != "" &&
+				prediction.Status != "" &&
+				prediction.Route.Type == 2 &&
+				prediction.Route.DirectionNames[prediction.Trip.DirectionId] == "Outbound" {
+
+				d := Departure{}
+				d.Destination = prediction.Trip.Headsign
+				t, err := time.Parse(time.RFC3339, prediction.DepartureTime)
+				if err == nil {
+					d.TimeLabel = t.Format("3:04PM")
+				} else {
+					err := fmt.Errorf("(Parse Error) %s", prediction.DepartureTime)
+					parseError.Errors = append(parseError.Errors, err)
+					d.TimeLabel = err.Error()
 				}
+				d.Status = prediction.Status
+				d.Track = prediction.Stop.PlatformCode
+				if d.Track == "" {
+					d.Track = "TBD"
+				}
+				departures = append(departures, d)
 			}
 		}
 	}
@@ -330,7 +287,7 @@ func main() {
 	// A test route that returns canned prediction data.
 	// Useful for tweaking CSS changes.
 	router.GET("/test", func(c *gin.Context) {
-		Render(c, &MbtaServiceTest{"testdata/morning-predictions.json"})
+		Render(c, &MbtaServiceTest{"testdata/predictions.json"})
 	})
 
 	// A test route that returns an API error.
