@@ -231,7 +231,6 @@ func ExtractDepartures(predictions []*Prediction) ([]Departure, error) {
 	for _, prediction := range predictions {
 		// We only want trains that match the following:
 		// ✔ Have a valid departure time
-		// ✔ Have a valid status
 		// ✔ On a commuter rail route (route.type == 2)
 		// ✔ Are on an outbound trip
 		if prediction.DepartureTime != "" &&
